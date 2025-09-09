@@ -1,5 +1,6 @@
 # Core UI
 gradio==4.31.5
+python-dotenv
 
 # TTS Engines
 coqui-tts==0.27.1
