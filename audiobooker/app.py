@@ -9,9 +9,10 @@ from tts_engines.coqui_engine import CoquiEngine
 from tts_engines.piper_engine import PiperEngine
 from tts_engines.pyttsx3_engine import Pyttsx3Engine
 from utils.book_loader import load_book
+from pydub import AudioSegment
+from io import BytesIO
 from pipeline.loudness import normalize_loudness
-from pipeline.post import add_silence
-from pipeline.export import export_audiobook
+from pipeline.chunker import chunk
 
 # --- Engine Initialization ---
 tts_engines = {}
@@ -58,7 +59,7 @@ def update_text(chapter_title):
             return text
     return ""
 
-def generate_audio(text, tts_engine_name):
+def generate_audio(text, tts_engine_name, progress=gr.Progress()):
     if not text:
         return None, "Please enter some text."
 
@@ -70,13 +71,28 @@ def generate_audio(text, tts_engine_name):
         return None, f"Engine '{tts_engine_name}' not available."
 
     try:
-        wav_bytes = engine.synth_to_wav_bytes(text)
+        text_chunks = chunk(text)
+        num_chunks = len(text_chunks)
+        processed_chunks = []
 
-        if not wav_bytes:
+        for i, text_chunk in enumerate(text_chunks):
+            progress((i + 1) / num_chunks, desc=f"Synthesizing chunk {i+1}/{num_chunks}")
+            wav_bytes = engine.synth_to_wav_bytes(text_chunk)
+            wav_bytes = normalize_loudness(wav_bytes)
+            processed_chunks.append(wav_bytes)
+
+        # Combine the chunks into a single audio segment
+        combined_audio = AudioSegment.empty()
+        for wav_bytes in processed_chunks:
+            if wav_bytes:
+                chunk_audio = AudioSegment.from_wav(BytesIO(wav_bytes))
+                combined_audio += chunk_audio
+
+        if len(combined_audio) == 0:
             return None, "Synthesis failed. Check the logs."
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
-            temp_audio_file.write(wav_bytes)
+            combined_audio.export(temp_audio_file.name, format="wav")
             temp_filename = temp_audio_file.name
 
         return temp_filename, "Synthesis complete."
@@ -96,19 +112,41 @@ def generate_full_audiobook(tts_engine_name, progress=gr.Progress()):
     num_chapters = len(demo.chapters)
 
     for i, (title, text) in enumerate(demo.chapters):
-        progress((i + 1) / num_chapters, desc=f"Synthesizing: {title}")
+        progress((i + 1) / num_chapters, desc=f"Processing Chapter: {title}")
 
-        wav_bytes = engine.synth_to_wav_bytes(text)
-        wav_bytes = normalize_loudness(wav_bytes)
-        wav_bytes = add_silence(wav_bytes, 1000) # 1 second of silence
-        processed_chapters.append(wav_bytes)
+        text_chunks = chunk(text)
+        num_chunks = len(text_chunks)
+        chapter_audio = AudioSegment.empty()
+
+        for j, text_chunk in enumerate(text_chunks):
+            progress((j + 1) / num_chunks, desc=f"Synthesizing chunk {j+1}/{num_chunks} of {title}")
+            wav_bytes = engine.synth_to_wav_bytes(text_chunk)
+            wav_bytes = normalize_loudness(wav_bytes)
+
+            if wav_bytes:
+                chunk_audio = AudioSegment.from_wav(BytesIO(wav_bytes))
+                chapter_audio += chunk_audio
+
+        # Add silence between chapters
+        if len(chapter_audio) > 0:
+            chapter_audio += AudioSegment.silent(duration=1000)
+
+        processed_chapters.append(chapter_audio)
 
     progress(1.0, desc="Combining chapters...")
+
+    # Combine all chapter audio segments
+    full_audiobook = AudioSegment.empty()
+    for chapter_audio in processed_chapters:
+        full_audiobook += chapter_audio
+
+    if len(full_audiobook) == 0:
+        return None, "Audiobook generation failed."
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
         output_path = temp_audio_file.name
 
-    export_audiobook(processed_chapters, output_path)
+    full_audiobook.export(output_path, format="wav")
 
     return output_path, "Audiobook generation complete."
 
