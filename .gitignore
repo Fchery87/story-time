@@ -1,0 +1,16 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+
+# Temporary files
+*.log
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg

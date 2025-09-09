@@ -1,2 +1,6 @@
+Chapter 1: The Beginning
 This is a sample text file.
+
+Chapter 2: The Middle
 It can be used to test the audiobook generation.
+And this is the end of the second chapter.
