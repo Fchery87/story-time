@@ -3,36 +3,42 @@ import pyloudnorm as pyln
 from pydub import AudioSegment
 from io import BytesIO
 
+def measure_loudness(audio: AudioSegment) -> float:
+    """Measures the integrated loudness of an AudioSegment in LUFS."""
+    samples = np.array(audio.get_array_of_samples()).astype(np.float32)
+    samples = samples / np.iinfo(np.int16).max
+    meter = pyln.Meter(audio.frame_rate)
+    return meter.integrated_loudness(samples)
+
 def normalize_loudness(wav_bytes: bytes, target_lufs: float = -20.0) -> bytes:
     """
-    Normalizes the loudness of a WAV file to a target LUFS.
+    Normalizes the loudness of a WAV file to a target LUFS, caps the peak,
+    and converts to stereo.
     """
     if not wav_bytes:
         return b''
 
     try:
-        # Load the audio data
         audio = AudioSegment.from_wav(BytesIO(wav_bytes))
 
-        # Convert to a numpy array and normalize to the range [-1.0, 1.0]
-        samples = np.array(audio.get_array_of_samples()).astype(np.float32)
-        samples = samples / np.iinfo(np.int16).max
+        # Measure loudness
+        loudness = measure_loudness(audio)
 
-        # Create a loudness meter
-        meter = pyln.Meter(audio.frame_rate)
-
-        # Measure the loudness
-        loudness = meter.integrated_loudness(samples)
-
-        # Calculate the gain needed to reach the target loudness
+        # Calculate gain for LUFS normalization
         gain_db = target_lufs - loudness
-
-        # Apply the gain using pydub
         normalized_audio = audio.apply_gain(gain_db)
 
-        # Export the normalized audio to bytes
+        # Cap the peak at -3.0 dBFS
+        if normalized_audio.max_dBFS > -3.0:
+            peak_reduction = -3.0 - normalized_audio.max_dBFS
+            normalized_audio = normalized_audio.apply_gain(peak_reduction)
+
+        # Convert to stereo
+        stereo_audio = normalized_audio.set_channels(2)
+
+        # Export to bytes
         output_buffer = BytesIO()
-        normalized_audio.export(output_buffer, format="wav")
+        stereo_audio.export(output_buffer, format="wav")
 
         return output_buffer.getvalue()
     except Exception as e:

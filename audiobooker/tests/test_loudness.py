@@ -1,24 +1,24 @@
 import unittest
 import numpy as np
-import pyloudnorm as pyln
 from pydub import AudioSegment
 from io import BytesIO
 import tempfile
 import os
-from audiobooker.pipeline.loudness import normalize_loudness
+from audiobooker.pipeline.loudness import normalize_loudness, measure_loudness
 
 class TestLoudness(unittest.TestCase):
     def setUp(self):
-        # Create a dummy WAV file on disk
+        # Create a dummy white noise WAV file on disk
         self.sample_rate = 16000
         duration_s = 2
-        frequency = 440
-        t = np.linspace(0., duration_s, int(self.sample_rate * duration_s))
-        amplitude = np.iinfo(np.int16).max * 0.5
-        data = amplitude * np.sin(2. * np.pi * frequency * t)
+        # Generate white noise
+        num_samples = int(self.sample_rate * duration_s)
+        samples = np.random.uniform(low=-1.0, high=1.0, size=num_samples)
+        # Scale to 16-bit integer range
+        samples = (samples * np.iinfo(np.int16).max).astype(np.int16)
 
         audio = AudioSegment(
-            data.astype("int16").tobytes(),
+            samples.tobytes(),
             frame_rate=self.sample_rate,
             sample_width=2,
             channels=1
@@ -36,19 +36,21 @@ class TestLoudness(unittest.TestCase):
             wav_bytes = f.read()
 
         # Normalize the loudness
-        target_lufs = -23.0
+        target_lufs = -20.0
         normalized_bytes = normalize_loudness(wav_bytes, target_lufs)
 
-        # Measure the loudness of the normalized audio
+        # Load the normalized audio
         normalized_audio = AudioSegment.from_wav(BytesIO(normalized_bytes))
-        normalized_samples = np.array(normalized_audio.get_array_of_samples()).astype(np.float32)
-        normalized_samples = normalized_samples / np.iinfo(np.int16).max
 
-        meter = pyln.Meter(normalized_audio.frame_rate)
-        measured_lufs = meter.integrated_loudness(normalized_samples)
-
-        # Assert that the measured loudness is close to the target
+        # 1. Test loudness
+        measured_lufs = measure_loudness(normalized_audio)
         self.assertAlmostEqual(target_lufs, measured_lufs, delta=1.0)
+
+        # 2. Test peak capping
+        self.assertLessEqual(normalized_audio.max_dBFS, -3.0)
+
+        # 3. Test stereo conversion
+        self.assertEqual(normalized_audio.channels, 2)
 
 if __name__ == '__main__':
     unittest.main()
