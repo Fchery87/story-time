@@ -22,3 +22,6 @@ beautifulsoup4==4.12.3
 
 # Numerics
 numpy==1.26.4
+
+# Test utilities (epub/pdf generation)
+reportlab==4.2.2

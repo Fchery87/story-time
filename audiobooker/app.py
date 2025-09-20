@@ -1,4 +1,5 @@
 import logging
+import os
 import tempfile
 from io import BytesIO
 
@@ -12,6 +13,12 @@ from tts_engines.coqui_engine import CoquiEngine
 from tts_engines.piper_engine import PiperEngine
 from tts_engines.pyttsx3_engine import Pyttsx3Engine
 from utils.book_loader import load_book
+from utils.cache import (
+    get_from_cache,
+    is_cache_enabled,
+    make_cache_key,
+    put_in_cache,
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,6 +46,29 @@ except Exception as e:
     engine_errors.append(f"Failed to initialize Piper TTS: {e}")
 
 available_engines = list(tts_engines.keys())
+
+
+def _engine_variant(engine) -> str:
+    # Best-effort identifier to include in cache key
+    return getattr(engine, "model_path", None) or getattr(engine, "model_name", None) or "default"
+
+
+def _synthesize_with_cache(engine_name, engine, text_chunk: str) -> bytes:
+    use_cache = is_cache_enabled()
+    variant = _engine_variant(engine)
+    key = make_cache_key(engine_name, variant, text_chunk)
+
+    if use_cache:
+        cached = get_from_cache(key)
+        if cached:
+            return cached
+
+    wav_bytes = engine.synth_to_wav_bytes(text_chunk)
+
+    if use_cache and wav_bytes:
+        put_in_cache(key, wav_bytes)
+
+    return wav_bytes
 
 
 # --- Gradio App Callbacks ---
@@ -85,7 +115,7 @@ def generate_audio(text, tts_engine_name, progress=gr.Progress()):
 
         for i, text_chunk in enumerate(text_chunks):
             progress((i + 1) / max(num_chunks, 1), desc=f"Synthesizing chunk {i+1}/{num_chunks}")
-            wav_bytes = engine.synth_to_wav_bytes(text_chunk)
+            wav_bytes = _synthesize_with_cache(tts_engine_name, engine, text_chunk)
             wav_bytes = normalize_loudness(wav_bytes)
             processed_chunks.append(wav_bytes)
 
@@ -130,7 +160,7 @@ def generate_full_audiobook(tts_engine_name, chapters, progress=gr.Progress()):
 
         for j, text_chunk in enumerate(text_chunks):
             progress((j + 1) / max(num_chunks, 1), desc=f"Synthesizing chunk {j+1}/{num_chunks} of {title}")
-            wav_bytes = engine.synth_to_wav_bytes(text_chunk)
+            wav_bytes = _synthesize_with_cache(tts_engine_name, engine, text_chunk)
             wav_bytes = normalize_loudness(wav_bytes)
 
             if wav_bytes:
