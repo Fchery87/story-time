@@ -2,6 +2,7 @@ import logging
 import os
 import wave
 from io import BytesIO
+from typing import Optional
 
 import torch
 from TTS.api import TTS
@@ -12,15 +13,22 @@ logger = logging.getLogger(__name__)
 
 
 class CoquiEngine(TTSEngine):
-    def __init__(self):
+    def __init__(self, model_name: Optional[str] = None):
         super().__init__()
-        self.model_name = os.environ.get("COQUI_MODEL_NAME", "tts_models/en/ljspeech/vits")
+        self.model_name = model_name or os.environ.get("COQUI_MODEL_NAME", "tts_models/en/ljspeech/vits")
+        self._load_model(self.model_name)
 
+    def _load_model(self, model_name: str) -> None:
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.tts = TTS(self.model_name).to(device)
+            self.tts = TTS(model_name).to(device)
+            self.model_name = model_name
         except Exception as e:
-            raise RuntimeError(f"Failed to load Coqui TTS model: {self.model_name}") from e
+            raise RuntimeError(f"Failed to load Coqui TTS model: {model_name}") from e
+
+    def update_model(self, model_name: str) -> None:
+        """Reload engine with a new model name."""
+        self._load_model(model_name)
 
     def _synthesize_chunk(self, text: str) -> bytes:
         """

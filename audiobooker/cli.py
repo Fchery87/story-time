@@ -2,15 +2,14 @@ import argparse
 import logging
 import os
 import sys
-import tempfile
 from io import BytesIO
 from typing import List, Tuple
 
 from pydub import AudioSegment
 
 from pipeline.chunker import chunk
+from pipeline.export import export_audio_file, export_chapters, export_m4b_with_chapters
 from pipeline.loudness import normalize_loudness
-from pipeline.export import export_audio_file, export_chapters
 from tts_engines.coqui_engine import CoquiEngine
 from tts_engines.piper_engine import PiperEngine
 from tts_engines.pyttsx3_engine import Pyttsx3Engine
@@ -79,6 +78,10 @@ def run_cli(
     per_chapter_dir: str | None = None,
     title: str | None = None,
     author: str | None = None,
+    max_chars: int = 1200,
+    silence_between_chapters_ms: int = 1000,
+    piper_length_scale: float | None = None,
+    pyttsx3_rate: int | None = None,
 ) -> int:
     engines, errors = _init_engines()
     if errors:
@@ -91,6 +94,18 @@ def run_cli(
 
     engine = engines[engine_name]
 
+    # Apply engine-specific params
+    if engine_name == "piper" and piper_length_scale is not None:
+        try:
+            engine.update_params(length_scale=piper_length_scale)
+        except Exception as e:
+            logging.warning("Failed to apply Piper parameters: %s", e)
+    if engine_name == "pyttsx3" and pyttsx3_rate is not None:
+        try:
+            engine.update_params(rate=pyttsx3_rate)
+        except Exception as e:
+            logging.warning("Failed to apply pyttsx3 parameters: %s", e)
+
     # Load book
     chapters: List[Tuple[str, str]] = load_book(input_path)
     if not chapters:
@@ -102,7 +117,7 @@ def run_cli(
 
     for idx, (ch_title, ch_text) in enumerate(chapters, start=1):
         logging.info("Processing chapter %d/%d: %s", idx, len(chapters), ch_title)
-        text_chunks = chunk(ch_text)
+        text_chunks = chunk(ch_text, max_chars=max_chars)
         wav_bytes_list: List[bytes] = []
 
         for j, text_chunk in enumerate(text_chunks, start=1):
@@ -112,7 +127,6 @@ def run_cli(
             wav_bytes_list.append(wav_bytes)
 
         chapter_audio = _combine_wav_bytes_to_segment(wav_bytes_list)
-        # Inter-chapter 1s silence will be added when combining below
         chapter_segments.append(chapter_audio)
         chapter_titles.append(ch_title)
 
@@ -120,8 +134,8 @@ def run_cli(
     full = AudioSegment.empty()
     for i, seg in enumerate(chapter_segments):
         full += seg
-        if i != len(chapter_segments) - 1:
-            full += AudioSegment.silent(duration=1000)
+        if i != len(chapter_segments) - 1 and silence_between_chapters_ms > 0:
+            full += AudioSegment.silent(duration=silence_between_chapters_ms)
 
     # Export chapters if requested
     if per_chapter_dir:
@@ -141,7 +155,21 @@ def run_cli(
         "artist": author or "Unknown",
         "album": title or "Audiobook",
     }
-    export_audio_file(full, output_path, metadata=metadata)
+    ext = output_path.split(".")[-1].lower()
+    if ext == "m4b":
+        ok = export_m4b_with_chapters(
+            chapter_segments,
+            titles=chapter_titles,
+            output_path=output_path,
+            chapter_silence_ms=silence_between_chapters_ms,
+            metadata=metadata,
+        )
+        if not ok:
+            logging.error("Failed exporting M4B with chapters")
+            return 4
+    else:
+        export_audio_file(full, output_path, metadata=metadata)
+
     logging.info("Audiobook exported to %s", output_path)
     return 0
 
@@ -164,6 +192,19 @@ def main(argv: List[str] | None = None) -> int:
         "--voice",
         help="Override voice/model for engine (currently used by Piper via PIPER_VOICE_PATH env var)",
     )
+    parser.add_argument("--max-chars", type=int, default=1200, help="Chunk size for TTS synthesis")
+    parser.add_argument(
+        "--silence-between-chapters-ms",
+        type=int,
+        default=1000,
+        help="Silence appended between chapters in the final output (ms)",
+    )
+    parser.add_argument(
+        "--piper-length-scale",
+        type=float,
+        help="Piper length_scale (speed) parameter (e.g., 0.8 faster, 1.2 slower)",
+    )
+    parser.add_argument("--pyttsx3-rate", type=int, help="pyttsx3 speech rate (e.g., 200)")
     parser.add_argument("--clear-cache", action="store_true", help="Clear TTS synthesis cache and exit")
     parser.add_argument("--no-cache", action="store_true", help="Disable cache for this run")
 
@@ -189,8 +230,14 @@ def main(argv: List[str] | None = None) -> int:
         per_chapter_dir=args.per_chapter_dir,
         title=args.title,
         author=args.author,
+        max_chars=args.max_chars,
+        silence_between_chapters_ms=args.silence_between_chapters_ms,
+        piper_length_scale=args.piper_length_scale,
+        pyttsx3_rate=args.pyttsx3_rate,
     )
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import sys as _sys
+
+    _sys.exit(main())

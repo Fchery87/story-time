@@ -97,7 +97,14 @@ def update_text(chapter_title, chapters):
     return ""
 
 
-def generate_audio(text, tts_engine_name, progress=gr.Progress()):
+def generate_audio(
+    text,
+    tts_engine_name,
+    max_chars,
+    piper_length_scale,
+    pyttsx3_rate,
+    progress=gr.Progress(),
+):
     if not text:
         return None, "Please enter some text."
 
@@ -108,8 +115,17 @@ def generate_audio(text, tts_engine_name, progress=gr.Progress()):
     if not engine:
         return None, f"Engine '{tts_engine_name}' not available."
 
+    # Apply engine-specific UI parameters
     try:
-        text_chunks = chunk(text)
+        if tts_engine_name == "piper" and hasattr(engine, "update_params"):
+            engine.update_params(length_scale=piper_length_scale)
+        if tts_engine_name == "pyttsx3" and hasattr(engine, "update_params"):
+            engine.update_params(rate=int(pyttsx3_rate))
+    except Exception as e:
+        logger.warning("Failed to update engine parameters: %s", e)
+
+    try:
+        text_chunks = chunk(text, max_chars=int(max_chars))
         num_chunks = len(text_chunks)
         processed_chunks = []
 
@@ -140,7 +156,15 @@ def generate_audio(text, tts_engine_name, progress=gr.Progress()):
         return None, f"An error occurred: {e}"
 
 
-def generate_full_audiobook(tts_engine_name, chapters, progress=gr.Progress()):
+def generate_full_audiobook(
+    tts_engine_name,
+    chapters,
+    max_chars,
+    silence_ms,
+    piper_length_scale,
+    pyttsx3_rate,
+    progress=gr.Progress(),
+):
     if not chapters:
         return None, "No book loaded."
 
@@ -148,13 +172,22 @@ def generate_full_audiobook(tts_engine_name, chapters, progress=gr.Progress()):
     if not engine:
         return None, f"Engine '{tts_engine_name}' not available."
 
+    # Apply engine-specific UI parameters
+    try:
+        if tts_engine_name == "piper" and hasattr(engine, "update_params"):
+            engine.update_params(length_scale=piper_length_scale)
+        if tts_engine_name == "pyttsx3" and hasattr(engine, "update_params"):
+            engine.update_params(rate=int(pyttsx3_rate))
+    except Exception as e:
+        logger.warning("Failed to update engine parameters: %s", e)
+
     processed_chapters = []
     num_chapters = len(chapters)
 
     for i, (title, text) in enumerate(chapters):
         progress((i + 1) / max(num_chapters, 1), desc=f"Processing Chapter: {title}")
 
-        text_chunks = chunk(text)
+        text_chunks = chunk(text, max_chars=int(max_chars))
         num_chunks = len(text_chunks)
         chapter_audio = AudioSegment.empty()
 
@@ -168,8 +201,8 @@ def generate_full_audiobook(tts_engine_name, chapters, progress=gr.Progress()):
                 chapter_audio += chunk_audio
 
         # Add silence between chapters
-        if len(chapter_audio) > 0:
-            chapter_audio += AudioSegment.silent(duration=1000)
+        if len(chapter_audio) > 0 and int(silence_ms) > 0:
+            chapter_audio += AudioSegment.silent(duration=int(silence_ms))
 
         processed_chapters.append(chapter_audio)
 
@@ -208,10 +241,16 @@ with gr.Blocks() as demo:
                 available_engines, label="TTS Engine", value=available_engines[0] if available_engines else None
             )
 
+            # Synthesis parameters
+            max_chars_slider = gr.Slider(200, 3000, value=1200, step=50, label="Chunk size (max chars)")
+            piper_speed_slider = gr.Slider(0.6, 1.6, value=1.0, step=0.05, label="Piper speed (length_scale)")
+            pyttsx3_rate_slider = gr.Slider(100, 250, value=200, step=1, label="pyttsx3 rate")
+
             with gr.Accordion("Single Chapter Synthesis", open=False):
                 generate_button = gr.Button("Generate Chapter Audio")
 
             with gr.Accordion("Full Audiobook Generation", open=True):
+                silence_slider = gr.Slider(0, 5000, value=1000, step=100, label="Silence between chapters (ms)")
                 generate_full_button = gr.Button("Generate Full Audiobook")
 
         with gr.Column(scale=2):
@@ -237,13 +276,20 @@ with gr.Blocks() as demo:
 
     generate_button.click(
         generate_audio,
-        inputs=[chapter_text_input, tts_engine_dropdown],
+        inputs=[chapter_text_input, tts_engine_dropdown, max_chars_slider, piper_speed_slider, pyttsx3_rate_slider],
         outputs=[audio_output, status_output],
     )
 
     generate_full_button.click(
         generate_full_audiobook,
-        inputs=[tts_engine_dropdown, chapters_state],
+        inputs=[
+            tts_engine_dropdown,
+            chapters_state,
+            max_chars_slider,
+            silence_slider,
+            piper_speed_slider,
+            pyttsx3_rate_slider,
+        ],
         outputs=[full_audiobook_output, status_output],
     )
 

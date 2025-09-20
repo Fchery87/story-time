@@ -51,7 +51,7 @@ A command-line interface is available for headless generation.
     --out /tmp/book.wav
   ```
 
-- M4B:
+- M4B with embedded chapters:
   ```bash
   python -m audiobooker.cli \
     my.epub \
@@ -62,10 +62,14 @@ A command-line interface is available for headless generation.
     --out /tmp/book.m4b
   ```
   Notes:
-  - Chapters are exported optionally via `--per-chapter-dir`. Embedded chapter markers inside M4B are not yet added.
+  - Embedded chapter markers are added using ffmpeg's ffmetadata.
   - Global metadata (title/author/album) is written for MP3/M4A/M4B/FLAC.
 
-Other options:
+Other useful options:
+- `--max-chars` chunk size for TTS synthesis (default 1200)
+- `--silence-between-chapters-ms` silence appended between chapters (default 1000)
+- `--piper-length-scale` Piper speed control (e.g., 0.8 faster, 1.2 slower)
+- `--pyttsx3-rate` pyttsx3 speech rate (e.g., 200)
 - `--no-cache` disable on-disk synthesis cache for this run
 - `--clear-cache` clear the cache and exit
 
@@ -88,8 +92,16 @@ Handled by `pyloudnorm` and `pydub`.
 
 ## Export Formats
 
-- `wav`, `mp3`, `flac`, `ogg`, `m4a`, `m4b` (M4B uses MP4/AAC container; chapter markers not yet embedded)
+- `wav`, `mp3`, `flac`, `ogg`, `m4a`, `m4b` (M4B uses MP4/AAC container; chapter markers supported)
 - Per-chapter files with metadata via the CLI `--per-chapter-dir` option
+
+## UI Usage
+
+1.  Launch the Gradio UI: `python app.py`
+2.  Upload a text file, EPUB, or PDF.
+3.  Select a TTS engine.
+4.  Tune parameters (chunk size, Piper speed, pyttsx3 rate), and generate.
+5.  Download the generated audio.
 
 ## Caching
 
@@ -98,13 +110,16 @@ Handled by `pyloudnorm` and `pydub`.
   - `AUDIOBOOKER_CACHE_ENABLED` (default `1`)
   - `AUDIOBOOKER_CACHE_DIR` (default `~/.cache/audiobooker`)
 
-## UI Usage
+## Docker
 
-1.  Launch the Gradio UI: `python app.py`
-2.  Upload a text file, EPUB, or PDF.
-3.  Select a TTS engine.
-4.  Click "Generate Audiobook".
-5.  Download the generated audio.
+- Build:
+  ```bash
+  docker build -t audiobooker .
+  ```
+- Run UI:
+  ```bash
+  docker run --rm -p 7860:7860 audiobooker
+  ```
 
 ## Development
 
@@ -112,7 +127,7 @@ Handled by `pyloudnorm` and `pydub`.
   - Pre-commit, Ruff, Black, and mypy configurations are included (`pyproject.toml`, `.pre-commit-config.yaml`).
   - Install pre-commit hooks:
     ```bash
-    pip install pre-commit
+    pip install -r requirements-dev.txt
     pre-commit install
     ```
 - Run tests:

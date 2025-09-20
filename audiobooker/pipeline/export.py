@@ -1,4 +1,7 @@
 import logging
+import os
+import subprocess
+import tempfile
 from io import BytesIO
 from typing import Iterable, Optional
 
@@ -82,8 +85,6 @@ def export_chapters(
     """
     Export chapters as individual files with basic metadata.
     """
-    import os
-
     fmt = _determine_ffmpeg_format(ext)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -104,6 +105,160 @@ def export_chapters(
             logger.info("Exported chapter %s to %s", title, out_path)
         except Exception:
             logger.exception("Failed exporting chapter %s", title)
+
+
+def concat_wav_files_ffmpeg(input_paths: list[str], output_path: str) -> bool:
+    """
+    Concatenate WAV files using ffmpeg concat demuxer with stream copy.
+    Returns True on success.
+    """
+    if not input_paths:
+        logger.warning("No input files to concatenate.")
+        return False
+
+    try:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    except Exception:
+        pass
+
+    # Create ffconcat list file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp_list:
+        for p in input_paths:
+            tmp_list.write(f"file '{p}'\n")
+        list_path = tmp_list.name
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list_path,
+        "-c",
+        "copy",
+        output_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        ok = True
+    except subprocess.CalledProcessError as e:
+        logger.error("ffmpeg concat failed: %s", e.stderr.decode("utf-8", errors="ignore"))
+        ok = False
+    finally:
+        try:
+            os.remove(list_path)
+        except Exception:
+            pass
+
+    if ok:
+        logger.info("Concatenated %d files to %s", len(input_paths), output_path)
+    return ok
+
+
+def export_m4b_with_chapters(
+    chapter_audios: Iterable[AudioSegment],
+    titles: Iterable[str],
+    output_path: str,
+    chapter_silence_ms: int = 1000,
+    metadata: Optional[dict] = None,
+) -> bool:
+    """
+    Export an M4B (AAC/MP4) with embedded chapter markers using ffmpeg's ffmetadata.
+    Returns True on success.
+    """
+    try:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    except Exception:
+        pass
+
+    titles = list(titles)
+    audios = list(chapter_audios)
+    if not audios:
+        logger.warning("No chapter audio to export as m4b.")
+        return False
+
+    # Build concatenated audio and compute chapter offsets
+    full = AudioSegment.empty()
+    starts = []
+    ends = []
+    cursor = 0
+    for i, seg in enumerate(audios):
+        starts.append(cursor)
+        cursor += len(seg)
+        ends.append(cursor)
+        if i != len(audios) - 1 and chapter_silence_ms > 0:
+            silence = AudioSegment.silent(duration=chapter_silence_ms)
+            full += seg + silence
+            cursor += chapter_silence_ms
+        else:
+            full += seg
+
+    # Export concatenated audio to a temporary m4a (mp4) file
+    with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as tmp_audio:
+        tmp_audio_path = tmp_audio.name
+    try:
+        full.export(tmp_audio_path, format="mp4")
+    except Exception:
+        logger.exception("Failed exporting intermediate m4a for m4b creation")
+        try:
+            os.remove(tmp_audio_path)
+        except Exception:
+            pass
+        return False
+
+    # Build ffmetadata file content
+    ffmeta_lines = [";FFMETADATA1"]
+    ffmeta_lines.append("title=%s" % (metadata.get("title") if metadata else "Audiobook"))
+    ffmeta_lines.append("artist=%s" % (metadata.get("artist") if metadata else "Unknown"))
+    ffmeta_lines.append("album=%s" % (metadata.get("album") if metadata else "Audiobook"))
+
+    for i, (start, end) in enumerate(zip(starts, ends), start=1):
+        title = titles[i - 1] if i - 1 < len(titles) else f"Chapter {i}"
+        ffmeta_lines.append("[CHAPTER]")
+        ffmeta_lines.append("TIMEBASE=1/1000")
+        ffmeta_lines.append(f"START={start}")
+        ffmeta_lines.append(f"END={end}")
+        ffmeta_lines.append(f"title={title}")
+
+    with tempfile.NamedTemporaryFile(suffix=".ffmeta", mode="w", delete=False) as tmp_meta:
+        tmp_meta.write("\n".join(ffmeta_lines))
+        tmp_meta_path = tmp_meta.name
+
+    # Use ffmpeg to merge metadata and chapters into final m4b
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        tmp_audio_path,
+        "-i",
+        tmp_meta_path,
+        "-map_metadata",
+        "1",
+        "-map_chapters",
+        "1",
+        "-codec",
+        "copy",
+        output_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        ok = True
+    except subprocess.CalledProcessError as e:
+        logger.error("ffmpeg failed embedding chapters: %s", e.stderr.decode("utf-8", errors="ignore"))
+        ok = False
+
+    # Cleanup
+    for p in (tmp_audio_path, tmp_meta_path):
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+
+    if ok:
+        logger.info("M4B with chapters exported to %s", output_path)
+    return ok
 
 
 def _write_metadata(path: str, metadata: dict) -> None:
@@ -133,7 +288,7 @@ def _write_metadata(path: str, metadata: dict) -> None:
         tags.save(path)
 
     elif ext in {"m4a", "m4b"}:
-        from mutagen.mp4 import MP4, MP4Cover
+        from mutagen.mp4 import MP4
 
         tags = MP4(path)
         if title:
