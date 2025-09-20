@@ -70,8 +70,23 @@ Other useful options:
 - `--silence-between-chapters-ms` silence appended between chapters (default 1000)
 - `--piper-length-scale` Piper speed control (e.g., 0.8 faster, 1.2 slower)
 - `--pyttsx3-rate` pyttsx3 speech rate (e.g., 200)
+- `--trim-silence` trim leading/trailing silence per chapter (leaves small padding)
+- `--compress` apply dynamic range compression per chapter
+- `--fade-ms` apply equal fade in/out (ms) per chapter
 - `--no-cache` disable on-disk synthesis cache for this run
 - `--clear-cache` clear the cache and exit
+
+Examples for new flags:
+- Trim and light fades:
+  ```bash
+  python -m audiobooker.cli samples/sample.txt --engine piper --out /tmp/book.wav \
+    --trim-silence --fade-ms 50
+  ```
+- Compression and trims to even out dynamics:
+  ```bash
+  python -m audiobooker.cli samples/sample.txt --engine piper --out /tmp/book.mp3 \
+    --compress --trim-silence
+  ```
 
 ## Engines
 
@@ -101,16 +116,38 @@ Handled by `pyloudnorm` and `pydub`.
 2.  Upload a text file, EPUB, or PDF.
 3.  Select a TTS engine.
 4.  Tune parameters (chunk size, Piper speed, pyttsx3 rate), and generate.
-5.  Download the generated audio.
-
-## Caching
-
-- By default, synthesized chunks are cached on disk to speed up repeat runs.
-- Configure via environment variables:
-  - `AUDIOBOOKER_CACHE_ENABLED` (default `1`)
-  - `AUDIOBOOKER_CACHE_DIR` (default `~/.cache/audiobooker`)
+5.  (Optional) Use Post-processing to trim silence, compress, and add fades.
+6.  Download the generated audio.
 
 ## Docker
+
+### Compose (recommended)
+
+A Docker Compose file is provided.
+
+- Prepare directories:
+  ```bash
+  mkdir -p models/piper cache output
+  ```
+- Put your Piper voice models (.onnx + .json) under `models/piper/`
+- Run:
+  ```bash
+  docker compose up --build
+  ```
+- Open the UI at http://localhost:7860
+
+Mounts and environment:
+- Volumes:
+  - `./models:/models:ro` — read-only models mount. Piper voices discovered under `/models/piper`.
+  - `./cache:/cache` — cache for synthesized chunks (`AUDIOBOOKER_CACHE_DIR`).
+  - `./output:/output` — optional output directory for future export workflows.
+- Environment variables:
+  - `PIPER_VOICES_DIR=/models/piper`
+  - `AUDIOBOOKER_CACHE_DIR=/cache`
+  - `AUDIOBOOKER_CACHE_ENABLED=1`
+  - `GRADIO_SERVER_NAME=0.0.0.0` (exposes UI outside the container)
+
+### Plain Docker
 
 - Build:
   ```bash
@@ -118,8 +155,20 @@ Handled by `pyloudnorm` and `pydub`.
   ```
 - Run UI:
   ```bash
-  docker run --rm -p 7860:7860 audiobooker
+  docker run --rm -p 7860:7860 \
+    -e PIPER_VOICES_DIR=/models/piper \
+    -e AUDIOBOOKER_CACHE_DIR=/cache \
+    -v "$(pwd)"/models:/models:ro \
+    -v "$(pwd)"/cache:/cache \
+    audiobooker
   ```
+
+## Caching
+
+- By default, synthesized chunks are cached on disk to speed up repeat runs.
+- Configure via environment variables:
+  - `AUDIOBOOKER_CACHE_ENABLED` (default `1`)
+  - `AUDIOBOOKER_CACHE_DIR` (default `~/.cache/audiobooker`)
 
 ## Development
 
