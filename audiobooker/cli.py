@@ -10,6 +10,7 @@ from pydub import AudioSegment
 from pipeline.chunker import chunk
 from pipeline.export import export_audio_file, export_chapters, export_m4b_with_chapters
 from pipeline.loudness import normalize_loudness
+from pipeline.post import apply_postprocessing
 from tts_engines.coqui_engine import CoquiEngine
 from tts_engines.piper_engine import PiperEngine
 from tts_engines.pyttsx3_engine import Pyttsx3Engine
@@ -67,7 +68,7 @@ def _combine_wav_bytes_to_segment(wav_bytes_list: List[bytes]) -> AudioSegment:
         if not b:
             continue
         seg = AudioSegment.from_wav(BytesIO(b))
-        combined += seg
+        combined = combined.append(seg, crossfade=10)
     return combined
 
 
@@ -82,6 +83,9 @@ def run_cli(
     silence_between_chapters_ms: int = 1000,
     piper_length_scale: float | None = None,
     pyttsx3_rate: int | None = None,
+    enable_trim: bool = False,
+    enable_compress: bool = False,
+    fade_ms: int = 0,
 ) -> int:
     engines, errors = _init_engines()
     if errors:
@@ -127,6 +131,13 @@ def run_cli(
             wav_bytes_list.append(wav_bytes)
 
         chapter_audio = _combine_wav_bytes_to_segment(wav_bytes_list)
+        # Apply optional post-processing per chapter
+        chapter_audio = apply_postprocessing(
+            chapter_audio,
+            enable_compression=enable_compress,
+            enable_trim=enable_trim,
+            fade_ms=int(fade_ms),
+        )
         chapter_segments.append(chapter_audio)
         chapter_titles.append(ch_title)
 
@@ -205,6 +216,9 @@ def main(argv: List[str] | None = None) -> int:
         help="Piper length_scale (speed) parameter (e.g., 0.8 faster, 1.2 slower)",
     )
     parser.add_argument("--pyttsx3-rate", type=int, help="pyttsx3 speech rate (e.g., 200)")
+    parser.add_argument("--trim-silence", action="store_true", help="Trim leading/trailing silence per chapter")
+    parser.add_argument("--compress", action="store_true", help="Apply dynamic range compression per chapter")
+    parser.add_argument("--fade-ms", type=int, default=0, help="Fade in/out (ms) per chapter")
     parser.add_argument("--clear-cache", action="store_true", help="Clear TTS synthesis cache and exit")
     parser.add_argument("--no-cache", action="store_true", help="Disable cache for this run")
 
@@ -234,6 +248,9 @@ def main(argv: List[str] | None = None) -> int:
         silence_between_chapters_ms=args.silence_between_chapters_ms,
         piper_length_scale=args.piper_length_scale,
         pyttsx3_rate=args.pyttsx3_rate,
+        enable_trim=args.trim_silence,
+        enable_compress=args.compress,
+        fade_ms=args.fade_ms,
     )
 
 
