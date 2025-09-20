@@ -1,14 +1,16 @@
-from abc import ABC, abstractmethod, abstractproperty
-import nltk
+import logging
+from abc import ABC, abstractmethod
 from io import BytesIO
+
 from pydub import AudioSegment
+
+logger = logging.getLogger(__name__)
+
 
 class TTSEngine(ABC):
     def __init__(self):
-        try:
-            nltk.data.find('tokenizers/punkt')
-        except LookupError:
-            nltk.download('punkt')
+        # Engines can override if they need specific initialization
+        pass
 
     @property
     def is_raw_output(self) -> bool:
@@ -17,12 +19,8 @@ class TTSEngine(ABC):
 
     @property
     def sample_rate(self) -> int:
-        """The sample rate of the synthesized audio."""
+        """The sample rate of the synthesized audio when output is raw."""
         return 22050  # A common default
-
-    def chunk_text(self, text: str) -> list[str]:
-        """Splits the text into sentences."""
-        return nltk.sent_tokenize(text)
 
     @abstractmethod
     def _synthesize_chunk(self, text: str) -> bytes:
@@ -31,44 +29,34 @@ class TTSEngine(ABC):
 
     def synth_to_wav_bytes(self, text: str) -> bytes:
         """
-        Synthesizes text to 16-bit PCM WAV bytes, handling long text by
-        chunking.
+        Synthesizes text to 16-bit PCM WAV bytes.
+
+        The engine is expected to handle the provided text as a single chunk.
+        Higher-level chunking should be performed by the pipeline layer.
         """
-        chunks = self.chunk_text(text)
+        if not text or not text.strip():
+            return b""
 
-        if not chunks:
-            return b''
+        audio_bytes = self._synthesize_chunk(text)
 
-        combined_audio = AudioSegment.empty()
+        if not audio_bytes:
+            return b""
 
-        for chunk in chunks:
-            if not chunk.strip():
-                continue
+        try:
+            if self.is_raw_output:
+                audio = AudioSegment.from_raw(
+                    BytesIO(audio_bytes),
+                    sample_width=2,  # 16-bit
+                    frame_rate=self.sample_rate,
+                    channels=1,
+                )
+            else:
+                audio = AudioSegment.from_wav(BytesIO(audio_bytes))
 
-            audio_bytes = self._synthesize_chunk(chunk)
-
-            if not audio_bytes:
-                continue
-
-            try:
-                if self.is_raw_output:
-                    chunk_audio = AudioSegment.from_raw(
-                        BytesIO(audio_bytes),
-                        sample_width=2,  # 16-bit
-                        frame_rate=self.sample_rate,
-                        channels=1
-                    )
-                else:
-                    chunk_audio = AudioSegment.from_wav(BytesIO(audio_bytes))
-
-                combined_audio += chunk_audio
-            except Exception as e:
-                print(f"Could not process audio chunk: {e}")
-
-        if len(combined_audio) == 0:
-            return b''
-
-        # Export the combined audio to a single WAV byte string
-        output_buffer = BytesIO()
-        combined_audio.export(output_buffer, format="wav")
-        return output_buffer.getvalue()
+            # Export the audio to a WAV byte string
+            output_buffer = BytesIO()
+            audio.export(output_buffer, format="wav")
+            return output_buffer.getvalue()
+        except Exception:
+            logger.exception("Could not process audio from engine output")
+            return b""

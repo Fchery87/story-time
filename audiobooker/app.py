@@ -1,18 +1,23 @@
-import gradio as gr
+import logging
 import tempfile
+from io import BytesIO
+
+import gradio as gr
 from dotenv import load_dotenv
+from pydub import AudioSegment
 
-# Load environment variables from .env file
-load_dotenv()
-
+from pipeline.chunker import chunk
+from pipeline.loudness import normalize_loudness
 from tts_engines.coqui_engine import CoquiEngine
 from tts_engines.piper_engine import PiperEngine
 from tts_engines.pyttsx3_engine import Pyttsx3Engine
 from utils.book_loader import load_book
-from pydub import AudioSegment
-from io import BytesIO
-from pipeline.loudness import normalize_loudness
-from pipeline.chunker import chunk
+
+# Load environment variables from .env file
+load_dotenv()
+
+# --- Logging ---
+logger = logging.getLogger(__name__)
 
 # --- Engine Initialization ---
 tts_engines = {}
@@ -35,29 +40,32 @@ except Exception as e:
 
 available_engines = list(tts_engines.keys())
 
-# --- Gradio App ---
 
+# --- Gradio App Callbacks ---
 def update_chapters(file):
     if file is None:
-        return gr.update(choices=[], value=None), ""
+        return gr.update(choices=[], value=None), "", []
 
     chapters = load_book(file.name)
-    chapter_titles = [title for title, text in chapters]
-
-    # Store chapters in a global state for now (Gradio limitation)
-    demo.chapters = chapters
+    chapter_titles = [title for title, _ in chapters]
 
     first_chapter_text = chapters[0][1] if chapters else ""
-    return gr.update(choices=chapter_titles, value=chapter_titles[0] if chapter_titles else None), first_chapter_text
+    return (
+        gr.update(choices=chapter_titles, value=chapter_titles[0] if chapter_titles else None),
+        first_chapter_text,
+        chapters,
+    )
 
-def update_text(chapter_title):
-    if not hasattr(demo, "chapters") or not demo.chapters:
+
+def update_text(chapter_title, chapters):
+    if not chapters:
         return ""
 
-    for title, text in demo.chapters:
+    for title, text in chapters:
         if title == chapter_title:
             return text
     return ""
+
 
 def generate_audio(text, tts_engine_name, progress=gr.Progress()):
     if not text:
@@ -76,7 +84,7 @@ def generate_audio(text, tts_engine_name, progress=gr.Progress()):
         processed_chunks = []
 
         for i, text_chunk in enumerate(text_chunks):
-            progress((i + 1) / num_chunks, desc=f"Synthesizing chunk {i+1}/{num_chunks}")
+            progress((i + 1) / max(num_chunks, 1), desc=f"Synthesizing chunk {i+1}/{num_chunks}")
             wav_bytes = engine.synth_to_wav_bytes(text_chunk)
             wav_bytes = normalize_loudness(wav_bytes)
             processed_chunks.append(wav_bytes)
@@ -98,10 +106,12 @@ def generate_audio(text, tts_engine_name, progress=gr.Progress()):
         return temp_filename, "Synthesis complete."
 
     except Exception as e:
+        logger.exception("Error during single chapter synthesis")
         return None, f"An error occurred: {e}"
 
-def generate_full_audiobook(tts_engine_name, progress=gr.Progress()):
-    if not hasattr(demo, "chapters") or not demo.chapters:
+
+def generate_full_audiobook(tts_engine_name, chapters, progress=gr.Progress()):
+    if not chapters:
         return None, "No book loaded."
 
     engine = tts_engines.get(tts_engine_name)
@@ -109,17 +119,17 @@ def generate_full_audiobook(tts_engine_name, progress=gr.Progress()):
         return None, f"Engine '{tts_engine_name}' not available."
 
     processed_chapters = []
-    num_chapters = len(demo.chapters)
+    num_chapters = len(chapters)
 
-    for i, (title, text) in enumerate(demo.chapters):
-        progress((i + 1) / num_chapters, desc=f"Processing Chapter: {title}")
+    for i, (title, text) in enumerate(chapters):
+        progress((i + 1) / max(num_chapters, 1), desc=f"Processing Chapter: {title}")
 
         text_chunks = chunk(text)
         num_chunks = len(text_chunks)
         chapter_audio = AudioSegment.empty()
 
         for j, text_chunk in enumerate(text_chunks):
-            progress((j + 1) / num_chunks, desc=f"Synthesizing chunk {j+1}/{num_chunks} of {title}")
+            progress((j + 1) / max(num_chunks, 1), desc=f"Synthesizing chunk {j+1}/{num_chunks} of {title}")
             wav_bytes = engine.synth_to_wav_bytes(text_chunk)
             wav_bytes = normalize_loudness(wav_bytes)
 
@@ -174,23 +184,25 @@ with gr.Blocks() as demo:
             with gr.Accordion("Full Audiobook Generation", open=True):
                 generate_full_button = gr.Button("Generate Full Audiobook")
 
-
         with gr.Column(scale=2):
             chapter_text_input = gr.Textbox(label="Chapter Text", lines=10, interactive=True)
             audio_output = gr.Audio(label="Synthesized Audio")
             full_audiobook_output = gr.File(label="Download Full Audiobook")
             status_output = gr.Textbox(label="Status")
 
+    # Use Gradio State to store chapters instead of global attributes
+    chapters_state = gr.State([])
+
     file_input.change(
         update_chapters,
         inputs=[file_input],
-        outputs=[chapter_dropdown, chapter_text_input]
+        outputs=[chapter_dropdown, chapter_text_input, chapters_state],
     )
 
     chapter_dropdown.change(
         update_text,
-        inputs=[chapter_dropdown],
-        outputs=[chapter_text_input]
+        inputs=[chapter_dropdown, chapters_state],
+        outputs=[chapter_text_input],
     )
 
     generate_button.click(
@@ -201,9 +213,14 @@ with gr.Blocks() as demo:
 
     generate_full_button.click(
         generate_full_audiobook,
-        inputs=[tts_engine_dropdown],
-        outputs=[full_audiobook_output, status_output]
+        inputs=[tts_engine_dropdown, chapters_state],
+        outputs=[full_audiobook_output, status_output],
     )
 
 if __name__ == "__main__":
+    # Basic logging configuration for the app entrypoint
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
     demo.launch()

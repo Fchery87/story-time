@@ -1,6 +1,6 @@
 # Core UI
 gradio==4.31.5
-python-dotenv
+python-dotenv==1.0.1
 
 # TTS Engines
 coqui-tts==0.27.1
@@ -19,3 +19,6 @@ nltk==3.8.1
 EbookLib==0.18
 pypdf==4.2.0
 beautifulsoup4==4.12.3
+
+# Numerics
+numpy==1.26.4
