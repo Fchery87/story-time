@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  audiobooker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: audiobooker
+    environment:
+      # Where Piper voice models (.onnx + .json) are located inside the container
+      - PIPER_VOICES_DIR=/models/piper
+      # Cache location for synthesized chunks
+      - AUDIOBOOKER_CACHE_DIR=/cache
+      - AUDIOBOOKER_CACHE_ENABLED=1
+      # Expose Gradio outside the container
+      - GRADIO_SERVER_NAME=0.0.0.0
+    volumes:
+      # Mount your local models (read-only). Put Piper voices under ./models/piper
+      - ./models:/models:ro
+      # Cache and output directories
+      - ./cache:/cache
+      - ./output:/output
+    ports:
+      - "7860:7860"
+    command: ["python", "app.py"]
